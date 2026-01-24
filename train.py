@@ -3,7 +3,9 @@ import os  # 操作系统接口，用于文件路径操作
 import sys  # 系统相关的参数和函数
 from dataclasses import dataclass  # 数据类装饰器
 from functools import partial  # 偏函数工具
-from PIL import Image  # Python图像处理库
+from typing import Optional, Union
+from pathlib import Path
+import json
 
 import torch  # PyTorch深度学习框架
 from transformers import (
@@ -13,16 +15,121 @@ from transformers import (
 )
 from transformers.trainer_utils import get_last_checkpoint  # 获取最新检查点工具
 import datasets  # HuggingFace数据集库
+from datasets import Dataset, DatasetDict, Features, Value, Image, List
+import PIL.Image as PImage
 import swanlab  # 实验跟踪和可视化工具
 
 from utils import load_model, load_processor  # 导入自定义的模型和处理器加载函数
 
 device = "cuda"  # 设置运行设备为GPU
 
+
+class VQADatasetLoader:
+    """
+    A loader class for VQA datasets in JSON format.
+    
+    The expected JSON format:
+    [
+        {
+            "image": "path/to/image.png",
+            "question_id": 12345,
+            "question": "What is shown in the image?",
+            "answer": "A cat"
+        },
+        ...
+    ]
+    
+    Attributes:
+        json_path: Path to the JSON file containing the dataset.
+        image_base_path: Optional base path to prepend to image paths.
+    """
+    
+    def __init__(
+        self, 
+        json_path: Union[str, Path], 
+        image_base_path: Optional[Union[str, Path]] = None
+    ):
+        """
+        Initialize the VQA Dataset Loader.
+        
+        Args:
+            json_path: Path to the JSON file containing the dataset.
+            image_base_path: Optional base path for images. If provided, 
+                            image paths in the dataset will be prefixed with this path.
+        """
+        self.json_path = Path(json_path)
+        self.image_base_path = Path(image_base_path) if image_base_path else None
+        
+    def _load_json(self) -> list[dict]:
+        """Load and parse the JSON file."""
+        with open(self.json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    
+    def _process_data(self, data: list[dict]) -> dict[str, list]:
+        """
+        Process the raw JSON data into a format suitable for Hugging Face datasets.
+        
+        Args:
+            data: List of dictionaries from the JSON file.
+            
+        Returns:
+            Dictionary with lists for each column.
+        """
+        processed = {
+            "images": [],
+            "question_id": [],
+            "texts": [],  # List of dicts, one per row
+        }
+        
+        for item in data:
+            # Handle image path
+            image_path = item.get("image", "")
+            if self.image_base_path and image_path:
+                image_path = str(self.image_base_path / image_path)
+                
+            processed["images"].append({"path": image_path})
+            processed["question_id"].append(item.get("question_id", -1))
+            processed["texts"].append({
+                "user": item.get("question", ""),
+                "assistant": item.get("answer", "")
+            })
+            
+        return processed
+    
+    def load(self, sample_count: Optional[int] = None, seed = int) -> Dataset:
+        """
+        Load the dataset as a Hugging Face Dataset.
+        
+        Args:
+            load_images: If True, load images as PIL Image objects. 
+                        If False, keep image paths as strings.
+                        
+        Returns:
+            A Hugging Face Dataset object.
+        """
+        raw_data = self._load_json()
+        processed_data = self._process_data(raw_data)
+        
+        # Define features with Image type for automatic image loading
+        features = Features({
+            "images": Image(),
+            "question_id": Value("int64"),
+            "texts": {
+             "user" : Value("string"),
+             "assistant": Value("string")
+            },
+        })
+        dataset = Dataset.from_dict(processed_data, features=features).shuffle(seed)
+
+        if sample_count:
+            dataset = dataset.select(range(sample_count))
+            
+        return dataset
+
 ################
-# 多模态数据集加载函数
+# Cauldron 多模态数据集加载函数
 ################
-def load_mm_data(select_data):
+def load_mm_data(select_data: str, data_dir: str, seed: int):
     """
     加载多模态训练数据集
     
@@ -32,6 +139,7 @@ def load_mm_data(select_data):
     Returns:
         datasets.DatasetDict: 包含train和test的数据集字典
     """
+    # os.environ['HF_HUB_CACHE'] = "./.cache/huggingface"
     # 定义所有可用的数据集列表（来自Cauldron数据集集合）
     all_data_names = [
         "chartqa",              # 图表问答数据集
@@ -42,7 +150,7 @@ def load_mm_data(select_data):
         "diagram_image_to_text",# 图表转文本数据集
         "geomverse",            # 几何推理数据集
         "ai2d",                 # AI2科学图表数据集
-        "iam",                  # 手写文档数据集
+        # "iam",                  # 手写文档数据集(为了翻译成中文后保持数据一致性先注释掉)
         "infographic_vqa",      # 信息图表问答数据集
         # "localized_narratives", # 局部化叙述数据集（已注释，质量不佳）
         "intergps",             # 地理空间推理数据集
@@ -51,7 +159,7 @@ def load_mm_data(select_data):
         "iconqa",               # 图标问答数据集
         "multihiertt",          # 层次表格推理数据集
         "mapqa",                # 地图问答数据集
-        "datikz",               # TikZ图形数据集
+        # "datikz",               # TikZ图形数据集(为了翻译成中文后保持数据一致性先注释掉)
         # "okvqa",              # OK-VQA数据集（已注释，质量不佳）
         "hitab",                # 层次表格问答数据集
         "chart2text",           # 图表转文本数据集
@@ -68,6 +176,8 @@ def load_mm_data(select_data):
         tmp_data = all_data_names  # 使用所有数据集
     elif select_data in all_data_names:
         tmp_data = [select_data]   # 使用指定的单个数据集
+    elif select_data.endswith("parquet"):
+        tmp_data = [select_data]
     else:
         raise f"cannot find {tmp_data}"  # 抛出错误：找不到指定数据集
 
@@ -77,7 +187,7 @@ def load_mm_data(select_data):
         try:
             # 从Cauldron数据集集合中加载指定数据集的训练部分
             data_list.append(
-                datasets.load_dataset("data/the_cauldron", data_name)["train"]
+                datasets.load_dataset("parquet", data_files = os.path.join(data_dir, data_name))["train"] if data_name.endswith("parquet") else datasets.load_dataset("data/the_cauldron", data_name)["train"]
             )
         except:
             print(f"bad dataset:{data_name}")  # 打印加载失败的数据集
@@ -88,10 +198,10 @@ def load_mm_data(select_data):
     # 划分训练集和测试集：随机选择64条作为测试集，其余作为训练集
     # 使用固定种子确保结果可复现，64条测试集是为了减少评估时间
     raw_data = raw_data.train_test_split(
-        64, shuffle=True, seed=training_args.data_seed
+        64, shuffle=True, seed=seed
     )
     
-    # 如果使用全部数据，则限制训练集大小为60K条，避免训练时间过长
+    # # 如果使用全部数据，则限制训练集大小为60K条，避免训练时间过长
     if select_data == "all":
         raw_data["train"] = raw_data["train"].select(range(60 * 1024))
     
@@ -117,8 +227,8 @@ def freeze_model(qwen_smvl):
         qwen_smvl: 冻结参数后的模型
     """
     # 冻结文本模型（语言模型）的所有参数
-    for _, param in qwen_smvl.model.text_model.named_parameters():
-        param.requires_grad = False
+    # for _, param in qwen_smvl.model.text_model.named_parameters():
+    #     param.requires_grad = False
     
     # 冻结视觉模型（图像编码器）的所有参数
     for _, param in qwen_smvl.model.vision_model.named_parameters():
@@ -189,12 +299,19 @@ def data_collate_fix2k(examples, processor, device, max_length=2048):
     # 处理批量中的每个样本
     for example in examples:
         # 只取第一张图像，避免显存不足（多图像会占用大量显存）
-        images = example["images"][:1]
+        images = example["images"]
+        if isinstance(images, list):
+            images = images[:1]
+        else:
+            images = [images]
         batch_image.append(images)
         image_num = len(images)  # 图像数量
         
         # 获取对话文本内容
-        chat_texts = example["texts"][0]
+        
+        chat_texts = example["texts"]
+        if isinstance(chat_texts, list):
+            chat_texts = chat_texts[0]
         
         # 构建对话消息格式，符合聊天模型的输入要求
         messages = [
@@ -257,10 +374,14 @@ class MyTrainArgs(TrainingArguments):
     - 实验跟踪参数
     """
     # 数据相关参数
-    train_data: str = "cocoqa"              # 训练数据集名称，默认使用cocoqa
+    train_data: str = "cocoqa"              # 训练数据集名称或者是json文件地址，默认使用cocoqa
+    data_dir: str = "data/the_cauldron"     # 训练数据集目录
+    val_data: Optional[str] = None          # 验证数据集的json文件地址，默认None
     seed: int = 42                          # 随机种子，确保实验可复现
+    selected_row_count: Optional[int] = None # 从训练集中随机采样K个样本，默认是None为使用全部样本
     data_seed: int = 42                     # 数据划分的随机种子
-    max_steps: Optional[int] = None  # 最大训练步数
+    max_steps: Optional[int] = -1  # 最大训练步数
+    num_train_epochs: Optional[float] = 1.0 #训练轮数
     
     # 批量大小设置
     per_device_train_batch_size: int = 1    # 每个设备的训练批量大小
@@ -317,6 +438,7 @@ def main(training_args):
     ################
     # 初始化模型和处理器
     ################
+    os.environ['HF_HUB_CACHE'] = "./.cache/huggingface"
     print("正在加载模型和处理器...")
     qwen_smvl_processor = load_processor()  # 加载数据处理器（分词器+图像处理器）
     qwen_smvl = load_model(device)          # 加载多模态模型到GPU
@@ -332,12 +454,20 @@ def main(training_args):
     # 准备训练数据集
     ################
     print(f"正在加载数据集: {training_args.train_data}")
-    raw_data = load_mm_data(select_data=training_args.train_data)
-    print(f"数据集加载完成，总数据条数：{raw_data}")
+    if training_args.train_data.endswith("json"):
+        loader = VQADatasetLoader(training_args.train_data, image_base_path="data/CVLUE")
+        raw_data_train = loader.load(sample_count=training_args.selected_row_count, seed=training_args.data_seed)
+        loader = VQADatasetLoader(training_args.val_data, image_base_path="data/CVLUE")
+        raw_data_val = loader.load(sample_count=64, seed=training_args.data_seed)#只选64条val data为了节省内存
+        # raw_data = datasets.concatenate_datasets([raw_data_train, raw_data_val])
+    else:
+        raw_data = load_mm_data(select_data=training_args.train_data, data_dir=training_args.data_dir, seed=training_args.data_seed)
+        raw_data_train, raw_data_val = raw_data["train"], raw_data["test"]
+    print(f"数据集加载完成，总训练数据条数：{raw_data_train}")
 
     # 创建数据整理函数（用于批量处理数据）
     collate_fn = partial(
-        data_collate_fix2k, processor=qwen_smvl_processor, device=device
+        data_collate_fix2k, processor=qwen_smvl_processor, device=device, max_length = 4096
     )
 
     ################
@@ -356,7 +486,7 @@ def main(training_args):
         # 如果没有找到检查点但目录不为空，抛出错误
         if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
             raise ValueError(
-                f"输出目录 ({training_args.output_dir}) 已存在且不为空。"
+                f"未找到最新检查点，输出目录 ({training_args.output_dir}) 已存在且不为空。"
                 "使用 --overwrite_output_dir 来覆盖现有内容。"
             )
         
@@ -374,16 +504,32 @@ def main(training_args):
     trainer = Trainer(
         model=qwen_smvl,                    # 要训练的模型
         args=training_args,                 # 训练参数
-        train_dataset=raw_data["train"],    # 训练数据集
-        eval_dataset=raw_data["test"],      # 评估数据集
+        train_dataset=raw_data_train,    # 训练数据集
+        eval_dataset=raw_data_val,      # 评估数据集
         data_collator=collate_fn,           # 数据整理函数
     )
-    
+    gpu_stats = torch.cuda.get_device_properties(0)
+    start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+    max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
+    print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
+    print(f"{start_gpu_memory} GB of memory reserved.")
     print("开始训练...")
     # 开始训练（如果有检查点则从检查点恢复）
-    trainer.train(resume_from_checkpoint=last_checkpoint)
+    trainer_stats = trainer.train(resume_from_checkpoint=last_checkpoint)
     
     print("训练完成，保存模型...")
+    used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+    used_memory_for_sft = round(used_memory - start_gpu_memory, 3)
+    used_percentage = round(used_memory / max_memory * 100, 3)
+    sft_percentage = round(used_memory_for_sft / max_memory * 100, 3)
+    print(f"{trainer_stats.metrics['train_runtime']} seconds used for training.")
+    print(
+        f"{round(trainer_stats.metrics['train_runtime']/60, 2)} minutes used for training."
+    )
+    print(f"Peak reserved memory = {used_memory} GB.")
+    print(f"Peak reserved memory for training = {used_memory_for_sft} GB.")
+    print(f"Peak reserved memory % of max memory = {used_percentage} %.")
+    print(f"Peak reserved memory for training % of max memory = {sft_percentage} %.")
     # 保存训练好的模型
     qwen_smvl.save_pretrained(training_args.output_dir)
 
@@ -426,7 +572,7 @@ def main(training_args):
             print(texts)
             
             # 加载测试图像
-            images = [[Image.open("./resource/dog.png")]]
+            images = [[PImage.open("./resource/dog.png")]]
             
             # 处理输入数据
             batch = qwen_smvl_processor(

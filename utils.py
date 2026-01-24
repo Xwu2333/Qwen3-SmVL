@@ -12,6 +12,8 @@ from transformers import (
     AutoModelForCausalLM,
 )
 from transformers.models.smolvlm.modeling_smolvlm import SmolVLMConnector
+import asyncio
+
 
 
 def load_processor():
@@ -383,4 +385,156 @@ def load_model_checkpoint(checkpoint_dir, device="cuda:0"):
         training_state = {}
     
     print(f"模型检查点已从 {checkpoint_dir} 加载")
-    return model, processor, training_state 
+    return model, processor, training_state
+
+
+def english_to_chinese(message: str, model: str= "qwen-mt-turbo", seed: int=42) -> str:
+    import os
+    # import aiohttp
+    # import asyncio
+    # import requests
+    from openai import OpenAI, AsyncOpenAI
+
+    # max_retries = 5
+    # base_delay = 2  # seconds
+    # sem = asyncio.Semaphore(5)
+    with OpenAI(
+        # 若没有配置环境变量，请用阿里云百炼API Key将下行替换为：api_key="sk-xxx",
+        # api_key=os.getenv("DASHSCOPE_API_KEY"),
+        api_key="sk-751cf34784b140688f1c5d1a65c98787",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ) as client:
+        messages = [
+                {
+                    "role": "user",
+                    "content": message
+                }
+            ]
+        translation_options = {
+                "source_lang": "English",
+                "target_lang": "Chinese",
+                "terms": [
+                    {
+                        "source": "USER",
+                        "target": "用户"
+                        
+                    },
+                    {
+                        "source": "ASSISTANT",
+                        "target": "助手"
+                        
+                    },
+                    {
+                        "source": "USER:",
+                        "target": "用户："
+                        
+                    },
+                    {
+                        "source": "ASSISTANT:",
+                        "target": "助手："
+                        
+                    },
+                    {
+                        "source": "USER:\n",
+                        "target": "用户：\n"
+                        
+                    },
+                    {
+                        "source": "\nASSISTANT:\n",
+                        "target": "\n助手：\n"
+                        
+                    },
+                    {
+                        "source": "\n\n",
+                        "target": "\n\n"
+                        
+                    }
+                #     {
+                #         "source": "(sample)",
+                #         "target": "(样本)"
+                #     },
+                #     {
+                #         "source": "(turn)",
+                #         "target": "(对话)"
+                #     },
+                #     {
+                #         "source": "(prompt)",
+                #         "target": "(提示词)"
+                #     },
+                #     {
+                #         "source": "(response)",
+                #         "target": "(回答)"
+                #     }
+                ],
+                "tm_list": [
+                    {
+                        "source": "USER:\nWhich algorithm has the highest accuracy?\nGive a very brief answer.\nASSISTANT:\nSystem.",
+                        "target": "用户：\n哪一个算法准确率最高？\n请简要回答。\n助手：\nSystem。"
+                    },
+                    {
+                        "source": "USER:\nIs each bar a single solid color without patterns?\nKeep it short and to the point.\nASSISTANT:\nNo.",
+                        "target": "用户：\n每一根柱子都是单色无图案的吗？\n请简短扼要。\n助手：\n不是。"
+                    },
+                    {
+                        "source": "USER:\nWhat is the shape of the blue thing?\nYour answer should be very brief.\nASSISTANT:\nSphere.\n\nUSER:\nHow many other things are made of the same material as the cyan object?\nYour response must be concise.\nASSISTANT:\n1.",
+                        "target": "用户：\n蓝色物体是什么形状？\n请简要回答。\n助手：\n球体。\n\n用户：\n有多少其他物体是由与青色物体相同材料制成的？\n你的回答必须简洁。\n助手：\n1。"
+                    }
+                ],
+                "domains": "This text is from the 'Cauldron' Vision-Language dataset that is used to train/fine-tune the vision-language model. It contains mutiple turns of interactions between user and assistant on a task or topic separated by a special token '<delimiter>'. Maintain coherence and consistency and keep precise and rigorous style as the origianl sentence when translating. Do not add or remove any information/content when translating. Pay atttention to the specific terminologies and sentence pattern that should be left unchanged. Translate into the style suitable for the training purpose of a cutting-edge large vision language model in AI field."
+            }
+
+    # api_key = "sk-751cf34784b140688f1c5d1a65c98787"
+    # api_url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    # headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    # json = {"messages": messages, "model": model, "seed": seed, "extra_body": {
+    #             "translation_options": translation_options,
+    #             "temperature": 0.7,
+    #             "top_k": 20
+    #         }
+    # }
+    # for attempt in range(max_retries):
+    #     try:
+    #         async with sem, aiohttp.ClientSession() as session, session.post(api_url, headers=headers, json=json) as response:
+    #             output = await response.json()
+    #            # Handle error responses
+    #             if 'error' in output:
+    #                 error_code = output['error'].get('code')
+    #                 error_msg = output['error'].get('message', 'Unknown error')
+                    
+    #                 if error_code == 'limit_requests':
+    #                     # Exponential backoff for rate limits
+    #                     wait_time = base_delay * (2 ** attempt)
+    #                     print(f"⚠️ Rate limit hit. Waiting {wait_time}s (attempt {attempt + 1}/{max_retries})...")
+    #                     await asyncio.sleep(wait_time)
+    #                     continue  # Retry
+    #                 else:
+    #                     raise Exception(f"API Error [{error_code}]: {error_msg}")
+                
+    #             # Successful response
+    #             if 'choices' in output:
+    #                 return output['choices'][0]['message']['content']
+    #             else:
+    #                 print(f"⚠️ Unexpected response format: {output}")
+    #                 return text  # Return original text as fallback
+    #     except Exception as e:
+    #             if attempt == max_retries - 1:
+    #                 print(f"❌ Failed after {max_retries} attempts: {e}")
+    #                 return text  # Return original text after all retries fail
+    #             await asyncio.sleep(base_delay)
+    # return message
+        
+
+    #     # print(f"Starting translation. Used model: {model}")
+        completion = client.chat.completions.create(
+            # model="qwen-mt-plus",
+            model=model,
+            messages=messages,
+            seed=seed,
+            extra_body={
+                "translation_options": translation_options,
+                "temperature": 0.1,
+                # "top_p": 0.5
+            }
+        )
+        # print(completion.choices[0].message.content)
+        return completion.choices[0].message.content

@@ -86,6 +86,8 @@ def inference(model, processor, image_path, prompt, max_tokens=512, device="cuda
     # 处理输入
     inputs = processor(text=text, images=image, return_tensors="pt")
     inputs = inputs.to(device)
+
+    print("Image tensor shape after processor: ", inputs["pixel_values"].shape)
     
     # 确保输入数据类型与模型权重匹配（bfloat16）
     for key in inputs:
@@ -117,7 +119,7 @@ def inference(model, processor, image_path, prompt, max_tokens=512, device="cuda
 def main():
     """主函数"""
     # 配置
-    model_path = "./model/staged_training_test/stage2"
+    model_path = "model/freeze_llm_vlm_cvlue_fulldata"
     image_path = "./resource/dog.png"  # 演示图片
     device = "cuda" if torch.cuda.is_available() else "cpu"
     

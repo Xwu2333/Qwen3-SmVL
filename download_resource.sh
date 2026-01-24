@@ -9,3 +9,6 @@ modelscope download --dataset HuggingFaceM4/Docmatix --local_dir ./data/Docmatix
 
 # https://blog.csdn.net/Toky_min/article/details/147514735
 modelscope download --dataset TIGER-Lab/VideoFeedback --local_dir ./data/VideoFeedback
+
+#Chinese eval dataset
+modelscope download --dataset ZhipuAI/AlignMMBench --local_dir ./data/AlignMMBench

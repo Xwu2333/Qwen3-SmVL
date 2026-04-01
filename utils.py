@@ -15,7 +15,6 @@ from transformers.models.smolvlm.modeling_smolvlm import SmolVLMConnector
 import asyncio
 
 
-
 def load_processor():
     """
     加载和配置数据处理器
@@ -40,6 +39,26 @@ def load_processor():
     print("正在加载Qwen3分词器...")
     qwen3_tokenizer = AutoTokenizer.from_pretrained("model/Qwen3-0.6B")
 
+    # 空间位置token列表：<row_1_col_1> 到 <row_6_col_6>，共36个。
+    # 默认训练配置下（longest_edge=1536，裁切尺寸364px），
+    # 最多产生 ceil(1536/364)=5 行×5列=25 个子图crop，因此6×6已留有余量。
+    # 必须将这些token注册为单一原子token，防止Qwen3的BPE将其拆分为
+    # 约9个子词（如 <、row、_、1、_、col、_、1、>），
+    # 否则模型无法获得干净的空间位置信号（SmolVLM2论文称此问题为"OCR loss plague"）。
+    ROW_COL_TOKENS = [
+        f"<row_{i}_col_{j}>"
+        for i in range(1, 7)
+        for j in range(1, 7)
+    ]
+    vocab_before = len(qwen3_tokenizer)
+    n_added = qwen3_tokenizer.add_special_tokens(
+        {"additional_special_tokens": ROW_COL_TOKENS}
+    )
+    vocab_after = len(qwen3_tokenizer)
+    print(f"  添加前词表大小: {vocab_before}")
+    print(f"  已新增 {n_added} 个位置特殊token（<row_i_col_j>）")
+    print(f"  添加后词表大小: {vocab_after}")
+
     print("正在配置处理器...")
     smolvlm2_processor.tokenizer = qwen3_tokenizer
     
@@ -54,6 +73,20 @@ def load_processor():
     smolvlm2_processor.end_of_utterance_token = "<im_end>"
     smolvlm2_processor.global_image_token = "<|vision_pad|>"
     smolvlm2_processor.video_token = "<|video_pad|>"
+
+    # 不手动覆盖 size 字段，直接使用 preprocessor_config.json 中的官方配置：
+    #   size.longest_edge           = 2048  （原图切割前的缩放上限）
+    #   max_image_size.longest_edge = 512   （每个子图 crop 送入 SigLIP 的分辨率）
+    #   do_image_splitting          = True
+    # 最大网格：ceil(2048 / 512) = 4 → 最多 4×4 = 16 个子图 crop
+    #
+    # 注意：SmolVLM2 的 dataset.py 在训练时将 size 动态覆盖为 1536，
+    # 但那是训练脚本中可配置的超参数（--image_target_size），
+    # 与本模型 preprocessor_config.json 的发布配置无关，不应在此沿用。
+    print(f"  图像处理器（来自 preprocessor_config.json）: "
+          f"size={smolvlm2_processor.image_processor.size}, "
+          f"max_image_size={smolvlm2_processor.image_processor.max_image_size}, "
+          f"do_image_splitting={smolvlm2_processor.image_processor.do_image_splitting}")
 
     return smolvlm2_processor
 
@@ -134,6 +167,198 @@ def load_model(device="cuda:0"):
     smolvlm2_02B_model.generation_config.eos_token_id = 151645
     
     print("模型构建完成！")
+    return smolvlm2_02B_model
+
+
+def load_model_v2(trained_model_path: Optional[str] = None, device: str = "cuda:0",
+                  strict: bool = True, new_vocab_size: Optional[int] = None):
+    """
+    加载和构建混合多模态模型（扩展版），可选地从训练检查点加载权重
+    
+    在保持原始 load_model 完整逻辑的基础上，增加了从指定路径加载已训练模型权重的功能。
+    工作流程：
+      1. 用预训练基础权重构建混合模型架构（与 load_model 完全相同）
+      2. 若提供 trained_model_path，则用该路径下的训练权重覆盖架构权重
+    
+    支持的权重文件格式（按优先级排序）：
+      - model.safetensors              (单文件 safetensors，HF 默认格式)
+      - model.safetensors.index.json   (分片 safetensors，大模型)
+      - pytorch_model.bin              (单文件 bin，旧版格式)
+      - pytorch_model.bin.index.json   (分片 bin，大模型旧版格式)
+    
+    Args:
+        trained_model_path: 已训练模型的目录路径（可选）。
+                            若为 None，行为与原始 load_model 完全一致，
+                            仅使用预训练基础权重。
+        device:             运行设备，默认为 "cuda:0"
+        strict:             是否严格匹配权重键名，默认为 True。
+                            若训练时仅保存部分模块，可设为 False。
+        new_vocab_size:     添加特殊token后的分词器词表大小，传入 len(processor.tokenizer)。
+                            若为 None，则不执行词表扩充。
+    
+    Returns:
+        smolvlm2_02B_model: 配置好的混合多模态模型（若提供路径则已加载训练权重）
+    """
+    import os
+    import json
+
+    # =========================================================
+    # 第一步：构建混合模型架构（与原始 load_model 逻辑完全一致）
+    # =========================================================
+    print("正在加载SmolVLM2视觉-语言模型...")
+    smolvlm2_02B_model = AutoModelForImageTextToText.from_pretrained(
+        "model/SmolVLM2-256M-Video-Instruct",
+        torch_dtype=torch.bfloat16,
+        _attn_implementation="eager",
+    ).to(device)
+
+    print("正在加载Qwen3语言模型...")
+    qwen3_06b_model = AutoModelForCausalLM.from_pretrained(
+        "model/Qwen3-0.6B",
+        torch_dtype=torch.bfloat16
+    ).to(device)
+
+    print("正在构建连接器配置...")
+    @dataclass
+    class VisionConfig:
+        hidden_size: int = 768
+
+    @dataclass
+    class TextConfig:
+        hidden_size: int = 1024
+
+    @dataclass
+    class ConnectConfig:
+        scale_factor: int = 4
+        vision_config: VisionConfig = field(default_factory=VisionConfig)
+        text_config: TextConfig = field(default_factory=TextConfig)
+
+    new_connector_config = ConnectConfig()
+
+    print("正在创建新的连接器...")
+    new_connector = SmolVLMConnector(new_connector_config).to(device).to(torch.bfloat16)
+    smolvlm2_02B_model.model.connector = new_connector
+
+    # 在替换组件前按需扩充 Qwen3 的嵌入表和输出头。
+    # 注意：必须与 embed_tokens.weight.shape[0]（实际矩阵行数）比较，
+    # 而非 qwen3_06b_model.vocab_size（config 值），因为 Qwen3 为提升
+    # GPU 效率会将嵌入矩阵行数对齐到整数倍（如 128 的倍数），导致
+    # embed_tokens.weight.shape[0] > config.vocab_size。
+    # 只有 new_vocab_size 超出实际矩阵大小时才需要 resize；
+    # 若新增 token 仍落在 padding 行内则无需操作。
+    actual_embed_size = qwen3_06b_model.model.embed_tokens.weight.shape[0]
+    if new_vocab_size is not None and new_vocab_size > actual_embed_size:
+        print(f"正在扩充Qwen3词表: {actual_embed_size} → {new_vocab_size} "
+              f"（新增 {new_vocab_size - actual_embed_size} 个token）")
+        qwen3_06b_model.resize_token_embeddings(new_vocab_size)
+    elif new_vocab_size is not None:
+        print(f"new_vocab_size={new_vocab_size} ≤ 实际嵌入矩阵大小 {actual_embed_size}，"
+              f"新token已落入padding行，无需resize。")
+
+    print("正在替换语言模型组件...")
+    smolvlm2_02B_model.model.text_model = qwen3_06b_model.model
+    smolvlm2_02B_model.lm_head = qwen3_06b_model.lm_head
+
+    print("正在更新模型配置...")
+    # 取替换后 embed_tokens 的实际行数作为 vocab_size 写回配置，
+    # 而非 new_vocab_size（当 new_vocab_size ≤ 矩阵大小时不会发生 resize，
+    # 实际大小仍为原始对齐值 actual_embed_size）。
+    vocab_size = qwen3_06b_model.model.embed_tokens.weight.shape[0]
+    smolvlm2_02B_model.vocab_size = vocab_size
+    smolvlm2_02B_model.model.vocab_size = vocab_size
+    smolvlm2_02B_model.config.vocab_size = vocab_size
+    smolvlm2_02B_model.config.text_config.vocab_size = vocab_size
+    smolvlm2_02B_model.model.config.vocab_siz = vocab_size
+    smolvlm2_02B_model.model.config.text_config.vocab_size = vocab_size
+
+    image_token_id = 151655
+    smolvlm2_02B_model.image_token_id = image_token_id
+    smolvlm2_02B_model.model.image_token_id = image_token_id
+    smolvlm2_02B_model.config.image_token_id = image_token_id
+    smolvlm2_02B_model.model.config.image_token_id = image_token_id
+
+    smolvlm2_02B_model.generation_config.eos_token_id = 151645
+
+    print("模型架构构建完成！")
+
+    # =========================================================
+    # 第二步（可选）：加载训练权重覆盖基础预训练权重
+    # =========================================================
+    if trained_model_path is None:
+        print("未提供 trained_model_path，使用预训练基础权重。")
+        return smolvlm2_02B_model
+
+    print(f"正在从 {trained_model_path} 加载训练权重...")
+
+    def _load_state_dict_from_path(model_dir: str, map_device: str) -> Dict[str, Any]:
+        """
+        从目录中检测并加载权重文件，支持单文件与分片格式。
+        优先级：safetensors > pytorch bin
+        """
+        # --- safetensors（单文件）---
+        single_sf = os.path.join(model_dir, "model.safetensors")
+        if os.path.exists(single_sf):
+            from safetensors.torch import load_file
+            print(f"  检测到单文件 safetensors: {single_sf}")
+            return load_file(single_sf, device=map_device)
+
+        # --- safetensors（分片）---
+        sharded_sf_index = os.path.join(model_dir, "model.safetensors.index.json")
+        if os.path.exists(sharded_sf_index):
+            from safetensors.torch import load_file
+            with open(sharded_sf_index, "r") as f:
+                index = json.load(f)
+            shard_files = sorted(set(index["weight_map"].values()))
+            print(f"  检测到分片 safetensors（{len(shard_files)} 个分片）")
+            state_dict: Dict[str, Any] = {}
+            for shard_file in shard_files:
+                shard_path = os.path.join(model_dir, shard_file)
+                print(f"  加载分片: {shard_file}")
+                state_dict.update(load_file(shard_path, device=map_device))
+            return state_dict
+
+        # --- pytorch bin（单文件）---
+        single_bin = os.path.join(model_dir, "pytorch_model.bin")
+        if os.path.exists(single_bin):
+            print(f"  检测到单文件 pytorch bin: {single_bin}")
+            return torch.load(single_bin, map_location=map_device)
+
+        # --- pytorch bin（分片）---
+        sharded_bin_index = os.path.join(model_dir, "pytorch_model.bin.index.json")
+        if os.path.exists(sharded_bin_index):
+            with open(sharded_bin_index, "r") as f:
+                index = json.load(f)
+            shard_files = sorted(set(index["weight_map"].values()))
+            print(f"  检测到分片 pytorch bin（{len(shard_files)} 个分片）")
+            state_dict: Dict[str, Any] = {}
+            for shard_file in shard_files:
+                shard_path = os.path.join(model_dir, shard_file)
+                print(f"  加载分片: {shard_file}")
+                state_dict.update(torch.load(shard_path, map_location=map_device))
+            return state_dict
+
+        raise FileNotFoundError(
+            f"在 '{model_dir}' 中未找到任何可识别的权重文件。\n"
+            f"期望以下文件之一存在：\n"
+            f"  - model.safetensors\n"
+            f"  - model.safetensors.index.json\n"
+            f"  - pytorch_model.bin\n"
+            f"  - pytorch_model.bin.index.json"
+        )
+
+    state_dict = _load_state_dict_from_path(trained_model_path, device)
+    missing_keys, unexpected_keys = smolvlm2_02B_model.load_state_dict(state_dict, strict=strict)
+
+    if missing_keys:
+        print(f"  ⚠️  缺失的权重键 ({len(missing_keys)} 个): {missing_keys[:5]}"
+              f"{'...' if len(missing_keys) > 5 else ''}")
+    if unexpected_keys:
+        print(f"  ⚠️  意外的权重键 ({len(unexpected_keys)} 个): {unexpected_keys[:5]}"
+              f"{'...' if len(unexpected_keys) > 5 else ''}")
+    if not missing_keys and not unexpected_keys:
+        print("  ✅ 所有权重键完全匹配。")
+
+    print("训练权重加载完成！")
     return smolvlm2_02B_model
 
 

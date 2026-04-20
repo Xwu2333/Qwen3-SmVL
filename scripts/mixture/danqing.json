@@ -1,0 +1,8 @@
+[
+    {
+        "source": "danqing",
+        "path": "data/DanQing/data/train-*.parquet",
+        "count": 100,
+        "label": "DanQing"
+    }
+]

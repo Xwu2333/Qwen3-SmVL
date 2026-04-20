@@ -16,7 +16,8 @@ from transformers.trainer_utils import get_last_checkpoint
 import datasets
 import swanlab
 
-from utils import load_model, load_processor
+# utils.py 已迁移至 qwen3smvl/utils.py
+from qwen3smvl.utils import load_model, load_processor
 
 
 device = "cuda"

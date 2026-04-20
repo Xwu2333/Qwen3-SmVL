@@ -1,4 +1,5 @@
-from utils import english_to_chinese
+# utils.py 已迁移至 qwen3smvl/utils.py
+from qwen3smvl.utils import english_to_chinese
 import os
 os.environ['HF_HOME'] = "../"
 from train import load_mm_data  # kept for legacy reference; not used in main below

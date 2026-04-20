@@ -11,7 +11,7 @@
 DATASET_ID="deepglint/DanQing"
 LOCAL_DIR="./data/DanQing"
 TOTAL_SHARDS=33298
-NUM_FILES=34              # 34 × ~3,003 ≈ 102,000 samples
+NUM_FILES=35              # 34 × ~3,003 ≈ 102,000 samples for training and additional 1 file for testing
 SEED=42                   # change for a different random draw
 MAX_JOBS=6                # parallel downloads (tune to your bandwidth)
 MAX_RETRIES=3             # attempts per shard before giving up and substituting

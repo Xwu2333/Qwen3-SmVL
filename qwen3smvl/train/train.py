@@ -1391,6 +1391,9 @@ class MyTrainArgs(TrainingArguments):
     remove_unused_columns: bool = False                 # 不移除未使用的数据列
 
     # ── 数据整理（data_collate_fix2k）开关 ──────────────────────────────────
+    max_seq_length: int = 2048
+    """分词后序列的最大长度（token 数），超出部分会被截断，不足部分会被填充。"""
+
     system_message: Optional[str] = None
     """系统提示词。None 时 data_collate_fix2k 使用内置默认中文提示词。"""
 
@@ -1462,7 +1465,7 @@ def train(training_args):
         data_collate_fix2k,
         processor=qwen_smvl_processor,
         device=device,
-        max_length=4096,
+        max_length=training_args.max_seq_length,
         system_message=training_args.system_message,
         add_media_intro_outro=training_args.add_media_intro_outro,
         mask_system_tokens=training_args.mask_system_tokens,

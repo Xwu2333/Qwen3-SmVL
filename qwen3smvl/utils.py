@@ -364,7 +364,21 @@ def load_model_v2(
         )
 
     state_dict = _load_state_dict_from_path(trained_model_path, device)
-    missing_keys, unexpected_keys = smolvlm2_02B_model.load_state_dict(state_dict, strict=strict)
+
+    # Qwen3 uses weight tying: lm_head.weight == model.embed_tokens.weight.
+    # When the checkpoint was saved with tied weights, lm_head.weight is absent.
+    # Detect this ahead of time and load with strict=False, then re-tie explicitly.
+    tied_lm_head = "lm_head.weight" not in state_dict
+    load_strict = strict and not tied_lm_head
+    missing_keys, unexpected_keys = smolvlm2_02B_model.load_state_dict(state_dict, strict=load_strict)
+
+    if tied_lm_head:
+        logger.info("  检测到权重绑定：lm_head.weight 未保存，重新绑定到 embed_tokens.weight。")
+        smolvlm2_02B_model.lm_head.weight = (
+            smolvlm2_02B_model.model.text_model.embed_tokens.weight
+        )
+        # Remove lm_head.weight from missing_keys since we handled it manually
+        missing_keys = [k for k in missing_keys if k != "lm_head.weight"]
 
     if missing_keys:
         logger.warning(f"  ⚠️  缺失的权重键 ({len(missing_keys)} 个): {missing_keys[:5]}"

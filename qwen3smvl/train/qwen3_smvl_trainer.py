@@ -57,9 +57,23 @@ class Qwen3SmVLTrainer(Trainer):
         args = self.args
 
         # ── 第 1 步：找出哪些参数需要权重衰减 ───────────────────────────────
-        # LayerNorm 和 bias 参数不应施加权重衰减
-        decay_parameter_names = get_parameter_names(model, ALL_LAYERNORM_LAYERS)
-        decay_parameter_names = [n for n in decay_parameter_names if "bias" not in n]
+        # 复用 HF Trainer 内置的 get_decay_parameter_names()，它会同时按
+        # 「层类型」(nn.LayerNorm) 和 「参数名正则」(bias / layernorm /
+        # rmsnorm / *.norm.* / *_norm) 双重过滤，能正确识别 Qwen3RMSNorm
+        # （q_norm / k_norm / input_layernorm / post_attention_layernorm /
+        # 顶层 norm 等）以及所有 bias 参数。
+        #
+        # 历史背景：旧实现仅传入 ALL_LAYERNORM_LAYERS = [nn.LayerNorm]，
+        # 由于 Qwen3 的归一化层是 Qwen3RMSNorm（不属于 nn.LayerNorm），
+        # 且 Qwen3 中所有 nn.Linear 均 bias=False，导致语言模型与连接器
+        # 全部参数被错误地划入 decay 组（no_decay = 0）。
+        # 改用 self.get_decay_parameter_names() 后会自动跟随 Transformers
+        # 的最新约定，无需为新模型手工维护 norm 类列表。
+        decay_parameter_names = self.get_decay_parameter_names(model)
+
+        # 旧逻辑（已停用，保留以便对照）：
+        # decay_parameter_names = get_parameter_names(model, ALL_LAYERNORM_LAYERS)
+        # decay_parameter_names = [n for n in decay_parameter_names if "bias" not in n]
 
         # ── 第 2 步：按名称将可训练参数分到三个桶 ─────────────────────────────
         vision_param_names = []
@@ -170,12 +184,12 @@ class Qwen3SmVLTrainer(Trainer):
 
         self.optimizer = optimizer_cls(optimizer_groups, **optimizer_kwargs)
 
-        # 汇总打印各参数组的配置
+        # 汇总打印各参数组的配置（直接从优化器读取，确保与实际运行一致）
         total_params = 0
         logger.info(f"\n[Qwen3SmVLTrainer] 优化器参数组详情：")
         logger.info(f"  {'组序号':<8} {'参数数量':<12} {'学习率':<14} {'权重衰减':<12}")
         logger.info(f"  {'─'*8} {'─'*12} {'─'*14} {'─'*12}")
-        for i, group in enumerate(optimizer_groups):
+        for i, group in enumerate(self.optimizer.param_groups):
             n_params = len(group["params"])
             total_params += n_params
             logger.info(f"  {i:<8} {n_params:<12} {group.get('lr', 0):<14.2e} "

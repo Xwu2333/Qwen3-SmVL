@@ -1336,6 +1336,9 @@ class MyTrainArgs(TrainingArguments):
     - 保存和评估策略
     - 实验跟踪参数
     """
+    # 模型相关参数
+    trained_model_path: Optional[str] = None  # 已训练模型权重目录，传入 load_model_v2 加载权重；None 则使用预训练基础权重
+    
     # 数据相关参数
     dataset_mix: str = "dataset_mix.json"   # load_mixed_data_v2 所需的数据集混合配置 JSON 文件路径
     seed: int = 42                          # 随机种子，确保实验可复现
@@ -1388,6 +1391,7 @@ class MyTrainArgs(TrainingArguments):
     overwrite_output_dir: bool = True                    # 是否覆盖输出目录
     report_to: str = "swanlab"                          # 实验跟踪工具
     run_name: str = "freeze_except_connector_fulldata"  # 实验运行名称
+    swanlab_project: str = "Qwen3-SmVL"                 # SwanLab 项目名称
     remove_unused_columns: bool = False                 # 不移除未使用的数据列
 
     # ── 数据整理（data_collate_fix2k）开关 ──────────────────────────────────
@@ -1437,7 +1441,11 @@ def train(training_args):
     qwen_smvl_processor = load_processor()  # 加载数据处理器（分词器+图像处理器）
     # 将分词器词表大小传入 load_model，确保 Qwen3 的 embed_tokens 和 lm_head
     # 已扩充以容纳 load_processor() 中新增的 <row_i_col_j> 特殊token
-    qwen_smvl = load_model_v2(device=device, new_vocab_size=len(qwen_smvl_processor.tokenizer))
+    qwen_smvl = load_model_v2(
+        trained_model_path=training_args.trained_model_path,
+        device=device,
+        new_vocab_size=len(qwen_smvl_processor.tokenizer),
+    )
     
     # 根据分组学习率自动冻结/解冻模型组件
     # 当 vision_tower_lr=0 时冻结视觉编码器，language_model_lr=0 时冻结语言模型，以此类推
@@ -1498,6 +1506,13 @@ def train(training_args):
                 f"检测到检查点，将从 {last_checkpoint} 恢复训练。"
                 "如要避免此行为，请更改 `--output_dir` 或添加 `--overwrite_output_dir` 从头开始训练。"
             )
+            # trained_model_path 加载的权重会被检查点覆盖，提醒用户避免混淆
+            if training_args.trained_model_path is not None:
+                logger.warning(
+                    f"已设置 trained_model_path='{training_args.trained_model_path}来加载已训练模型权重'，"
+                    f"但检测到检查点 '{last_checkpoint}' 将被恢复。"
+                    f"load_model_v2 加载的权重会被检查点覆盖，trained_model_path 加载的权重实际未生效。"
+                )
     
     ################
     # 初始化训练器并开始训练
@@ -1545,6 +1560,15 @@ def train(training_args):
         f"({training_overhead / max_memory * 100:.1f}%)\n"
         f"  Post-training steady state      = {current_allocated / 2**30:.3f} GB"
     )
+
+    # Detailed per-segment breakdown from PyTorch's caching allocator:
+    # shows active, reserved, and freed blocks across small/large pool segments,
+    # which helps diagnose fragmentation when reserved >> allocated.
+    logger.info(
+        "CUDA memory summary (full allocator breakdown):\n"
+        + torch.cuda.memory_summary(device=training_args.local_process_index, abbreviated=False)
+    )
+
     # 保存训练好的模型
     qwen_smvl.save_pretrained(training_args.output_dir)
 
@@ -1674,6 +1698,17 @@ if __name__ == "__main__":
     # 可选：直接从指定的YAML文件加载参数（用于调试，从项目根目录执行）
     # (training_args,) = parser.parse_yaml_file(yaml_file='scripts/train/full_train.yaml')
     
+    # ── 尽早初始化 SwanLab，使后续所有 stdout/stderr 都被捕获到实验日志中 ────
+    # 必须在 train() 之前调用 swanlab.init()，否则模型加载、数据加载等阶段的
+    # 日志不会出现在 SwanLab 的 "Logs" 标签页中。
+    # Trainer 的 report_to="swanlab" 会检测到已有运行并复用，不会重复初始化。
+    if "swanlab" in training_args.report_to:
+        swanlab.init(
+            project=training_args.swanlab_project,
+            experiment_name=training_args.run_name,
+            config=vars(training_args),
+        )
+
     # 启动主训练流程
     logger.info("=" * 50)
     logger.info("开始训练流程")

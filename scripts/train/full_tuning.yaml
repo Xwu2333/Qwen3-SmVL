@@ -1,0 +1,38 @@
+dataset_mix: "scripts/mixture/final_mixture_ZH.json"
+trained_model_path: "./model/unfreeze_connector_pretraining_test_warmup"
+seed: 42
+# 分词后序列最大长度（token 数），超长截断、不足填充
+max_seq_length: 4096
+# num_train_epochs: 1
+max_steps: 100
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8
+dataloader_pin_memory: False
+warmup_ratio: 0.03
+# 全局学习率（LR调度器基准值 / 后备默认值）
+learning_rate: 0.00002
+# 分组学习率：设为 0 则冻结该组件；此处全部解冻，进入全量微调模式
+vision_tower_lr: 0.000005     # 5e-6，视觉编码器（SigLIP）使用最低学习率
+connector_lr: 0.0001          # 1e-4，连接器使用最高学习率
+language_model_lr: 0.00002    # 2e-5，语言模型（Qwen3 + lm_head）使用中等学习率
+lr_scheduler_type: "cosine"
+weight_decay: 0
+logging_steps: 1
+eval_strategy: "steps"
+eval_steps: 10
+save_strategy: "steps"
+save_steps: 10
+save_total_limit: 8
+optim: "adamw_torch"
+bf16: True
+output_dir: "./model/full_tuning_test"
+overwrite_output_dir: False
+report_to: "swanlab"
+run_name: "full_tuning_test"
+remove_unused_columns: False
+# 全量微调显存占用较高，默认开启梯度检查点以节省显存
+gradient_checkpointing: True
+add_media_intro_outro: True
+mask_system_tokens: True
+mask_user_tokens: True
+

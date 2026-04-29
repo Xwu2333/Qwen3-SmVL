@@ -1239,7 +1239,7 @@ def data_collate_fix2k(
         "并使用自然语言协助用户完成各种任务。"
     )
     _DEFAULT_IMAGE_INTRO  = "以下是一些图片："
-    _DEFAULT_MEDIA_OUTTRO = "现在请回答以下问题："
+    _DEFAULT_MEDIA_OUTTRO = "现在请回答以下问题或者完成以下要求："
 
     # 若调用方未传入 system_message，使用上方默认值
     if system_message is None:

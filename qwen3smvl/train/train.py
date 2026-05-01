@@ -413,9 +413,9 @@ def load_mixed_data_v2(
         if user_field and assistant_field:
             # ── Flat QA format ─────────────────────────────────────────────
             for item in sampled:
-                img_file = item.get(image_field, "")
+                img_file = item.get(image_field, "").replace("\\", "/")
                 if image_base and img_file:
-                    img_file = os.path.join(image_base, img_file)
+                    img_file = os.path.join(image_base.replace("\\", "/"), img_file).replace("\\", "/")
                 # Only skip if a path was resolved but the file is missing
                 if img_file and image_base and not os.path.isfile(img_file):
                     skipped += 1
@@ -427,16 +427,22 @@ def load_mixed_data_v2(
                     skipped += 1
                     continue
 
-                # Store image if the file exists; otherwise keep images empty
-                img_entry = [{"path": img_file}] if (img_file and os.path.isfile(img_file)) else []
+                # Store image bytes so the entry is self-contained (portable across OSes
+                # and machines — avoids path-only entries with OS-specific separators
+                # being baked into parquet files created on Windows).
+                if img_file and os.path.isfile(img_file):
+                    with open(img_file, "rb") as _f:
+                        img_entry = [{"bytes": _f.read(), "path": None}]
+                else:
+                    img_entry = []
                 images_col.append(img_entry)
                 texts_col.append([{"user": u, "assistant": a, "source": lbl}])
         else:
             # ── ShareGPT-4o conversations format ───────────────────────────
             for item in sampled:
-                img_file = item.get("image", "")
+                img_file = item.get("image", "").replace("\\", "/")
                 if image_base and img_file:
-                    img_file = os.path.join(image_base, img_file)
+                    img_file = os.path.join(image_base.replace("\\", "/"), img_file).replace("\\", "/")
                 if img_file and not os.path.isfile(img_file):
                     skipped += 1
                     continue
@@ -454,7 +460,11 @@ def load_mixed_data_v2(
                     skipped += 1
                     continue
 
-                images_col.append([{"path": img_file}] if img_file else [])
+                if img_file:
+                    with open(img_file, "rb") as _f:
+                        images_col.append([{"bytes": _f.read(), "path": None}])
+                else:
+                    images_col.append([])
                 texts_col.append(turns)
 
         if skipped:
@@ -490,14 +500,18 @@ def load_mixed_data_v2(
         skipped = 0
 
         for item in sampled:
-            img_file = item.get("image", "")
+            img_file = item.get("image", "").replace("\\", "/")
             if image_base and img_file:
-                img_file = os.path.join(image_base, img_file)
+                img_file = os.path.join(image_base.replace("\\", "/"), img_file).replace("\\", "/")
             if img_file and not os.path.isfile(img_file):
                 skipped += 1
                 continue
 
-            images_col.append([{"path": img_file}] if img_file else [])
+            if img_file:
+                with open(img_file, "rb") as _f:
+                    images_col.append([{"bytes": _f.read(), "path": None}])
+            else:
+                images_col.append([])
             texts_col.append([{
                 "user":      item.get("question", ""),
                 "assistant": item.get("answer",   ""),
@@ -523,6 +537,28 @@ def load_mixed_data_v2(
         path = spec["path"]
         ds = datasets.load_dataset("parquet", data_files=path)["train"]
         ds = ds.select(_sample_indices(len(ds), count, rng))
+
+        # Fix Windows-style backslash paths stored in image structs.
+        # Parquets created on Windows may contain path-only image entries like
+        # {"bytes": None, "path": "data/ShareGPT-4o/mnt/.../image\41477.jpg"}.
+        # PIL.Image.open() cannot resolve the backslash separator on Linux.
+        # Strategy: temporarily disable Image decoding to access raw dicts, fix
+        # any backslash paths in a map pass, then re-enable decoding.  HuggingFace
+        # encode_example will read the file bytes for path-only entries during the
+        # map, making each image self-contained in the resulting Arrow cache.
+        if "images" in ds.column_names:
+            ds = ds.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
+
+            def _fix_img_paths(example):
+                fixed = []
+                for img in (example["images"] or []):
+                    if isinstance(img, dict) and "\\" in (img.get("path") or ""):
+                        img = {**img, "path": img["path"].replace("\\", "/")}
+                    fixed.append(img)
+                return {"images": fixed}
+
+            ds = ds.map(_fix_img_paths, desc=f"fixing image paths [{lbl}]")
+            ds = ds.cast_column("images", datasets.Sequence(datasets.Image()))
 
         def _tag(batch):
             return {"data_source": [lbl] * len(batch["texts"])}

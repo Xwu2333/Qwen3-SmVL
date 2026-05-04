@@ -1720,7 +1720,14 @@ if __name__ == "__main__":
     # 必须在 train() 之前调用 swanlab.init()，否则模型加载、数据加载等阶段的
     # 日志不会出现在 SwanLab 的 "Logs" 标签页中。
     # Trainer 的 report_to="swanlab" 会检测到已有运行并复用，不会重复初始化。
-    if "swanlab" in training_args.report_to:
+    #
+    # 分布式训练时 torchrun 会为每个进程设置 LOCAL_RANK 环境变量：
+    #   local_rank == -1  → 单 GPU / 非分布式，主进程
+    #   local_rank ==  0  → 多 GPU，主进程（rank 0）
+    #   local_rank  >  0  → 多 GPU，工作进程 — 不应创建独立实验
+    # 只在主进程（local_rank ∈ {-1, 0}）上调用 swanlab.init()，其他进程跳过。
+    # Trainer 的 SwanLabCallback 同样只在主进程上执行日志记录，因此不会遗漏指标。
+    if "swanlab" in training_args.report_to and training_args.local_rank in (-1, 0):
         swanlab.init(
             project=training_args.swanlab_project,
             experiment_name=training_args.run_name,

@@ -538,28 +538,6 @@ def load_mixed_data_v2(
         ds = datasets.load_dataset("parquet", data_files=path)["train"]
         ds = ds.select(_sample_indices(len(ds), count, rng))
 
-        # Fix Windows-style backslash paths stored in image structs.
-        # Parquets created on Windows may contain path-only image entries like
-        # {"bytes": None, "path": "data/ShareGPT-4o/mnt/.../image\41477.jpg"}.
-        # PIL.Image.open() cannot resolve the backslash separator on Linux.
-        # Strategy: temporarily disable Image decoding to access raw dicts, fix
-        # any backslash paths in a map pass, then re-enable decoding.  HuggingFace
-        # encode_example will read the file bytes for path-only entries during the
-        # map, making each image self-contained in the resulting Arrow cache.
-        if "images" in ds.column_names:
-            ds = ds.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
-
-            def _fix_img_paths(example):
-                fixed = []
-                for img in (example["images"] or []):
-                    if isinstance(img, dict) and "\\" in (img.get("path") or ""):
-                        img = {**img, "path": img["path"].replace("\\", "/")}
-                    fixed.append(img)
-                return {"images": fixed}
-
-            ds = ds.map(_fix_img_paths, desc=f"fixing image paths [{lbl}]")
-            ds = ds.cast_column("images", datasets.Sequence(datasets.Image()))
-
         def _tag(batch):
             return {"data_source": [lbl] * len(batch["texts"])}
         ds = ds.map(_tag, batched=True, desc=f"tagging {lbl}")
@@ -1571,6 +1549,10 @@ def train(training_args):
 
     logger.info(f"GPU = {gpu_stats.name}. Total VRAM = {max_memory / 2**30:.2f} GB.")
     logger.info(f"Baseline memory allocated = {baseline_allocated / 2**30:.3f} GB.")
+    logger.info(f"max_seq_length = {training_args.max_seq_length}")
+    logger.info(f"num_train_epochs = {training_args.num_train_epochs}")
+    logger.info(f"per_device_train_batch_size = {training_args.per_device_train_batch_size}")
+    logger.info(f"gradient_accumulation_steps = {training_args.gradient_accumulation_steps}")
     logger.info("Starting training...")
 
     # 开始训练（如果有检查点则从检查点恢复）

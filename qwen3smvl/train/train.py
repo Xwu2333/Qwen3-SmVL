@@ -1637,7 +1637,7 @@ def train(training_args):
                 images=images,          # 图像列表
                 max_length=1024,        # 最大长度
                 return_tensors="pt",    # 返回PyTorch张量
-                padding_side="left",    # 左侧填充
+                padding_side="left",    # 推理时推荐左侧填充
                 padding=True,           # 启用填充
             ).to(qwen_smvl.device, dtype=torch.bfloat16)
             

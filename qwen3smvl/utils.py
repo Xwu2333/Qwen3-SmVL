@@ -101,83 +101,83 @@ def load_processor():
     return smolvlm2_processor
 
 
-def load_model(device="cuda:0"):
-    """
-    加载和构建混合多模态模型
+# def load_model(device="cuda:0"):
+#     """
+#     加载和构建混合多模态模型
     
-    此函数实现了一个创新的模型架构组合：
-    1. 使用SmolVLM2的视觉编码器处理图像
-    2. 使用Qwen3的语言模型处理文本
-    3. 创建新的连接器将视觉特征映射到文本特征空间
+#     此函数实现了一个创新的模型架构组合：
+#     1. 使用SmolVLM2的视觉编码器处理图像
+#     2. 使用Qwen3的语言模型处理文本
+#     3. 创建新的连接器将视觉特征映射到文本特征空间
     
-    这种组合的优势：
-    - SmolVLM2：优秀的视觉理解能力
-    - Qwen3：强大的中文语言能力
-    - 自定义连接器：优化的跨模态特征映射
+#     这种组合的优势：
+#     - SmolVLM2：优秀的视觉理解能力
+#     - Qwen3：强大的中文语言能力
+#     - 自定义连接器：优化的跨模态特征映射
     
-    Args:
-        device: 运行设备，默认为"cuda:0"
+#     Args:
+#         device: 运行设备，默认为"cuda:0"
     
-    Returns:
-        smolvlm2_02B_model: 配置好的混合多模态模型
-    """
-    logger.info("正在加载SmolVLM2视觉-语言模型...")
-    smolvlm2_02B_model = AutoModelForImageTextToText.from_pretrained(
-        _SMOLVLM_PATH,
-        torch_dtype=torch.bfloat16,
-        _attn_implementation="eager",
-    ).to(device)
+#     Returns:
+#         smolvlm2_02B_model: 配置好的混合多模态模型
+#     """
+#     logger.info("正在加载SmolVLM2视觉-语言模型...")
+#     smolvlm2_02B_model = AutoModelForImageTextToText.from_pretrained(
+#         _SMOLVLM_PATH,
+#         torch_dtype=torch.bfloat16,
+#         _attn_implementation="eager",
+#     ).to(device)
     
-    logger.info("正在加载Qwen3语言模型...")
-    qwen3_06b_model = AutoModelForCausalLM.from_pretrained(
-        _QWEN3_PATH, 
-        torch_dtype=torch.bfloat16
-    ).to(device)
+#     logger.info("正在加载Qwen3语言模型...")
+#     qwen3_06b_model = AutoModelForCausalLM.from_pretrained(
+#         _QWEN3_PATH, 
+#         torch_dtype=torch.bfloat16
+#     ).to(device)
 
-    logger.info("正在构建连接器配置...")
-    @dataclass
-    class VisionConfig:
-        hidden_size: int = 768
+#     logger.info("正在构建连接器配置...")
+#     @dataclass
+#     class VisionConfig:
+#         hidden_size: int = 768
 
-    @dataclass
-    class TextConfig:
-        hidden_size: int = 1024
+#     @dataclass
+#     class TextConfig:
+#         hidden_size: int = 1024
 
-    @dataclass
-    class ConnectConfig:
-        scale_factor: int = 4
-        vision_config: VisionConfig = field(default_factory=VisionConfig)
-        text_config: TextConfig = field(default_factory=TextConfig)
+#     @dataclass
+#     class ConnectConfig:
+#         scale_factor: int = 4
+#         vision_config: VisionConfig = field(default_factory=VisionConfig)
+#         text_config: TextConfig = field(default_factory=TextConfig)
 
-    new_connector_config = ConnectConfig()
+#     new_connector_config = ConnectConfig()
 
-    logger.info("正在创建新的连接器...")
-    new_connector = SmolVLMConnector(new_connector_config).to(device).to(torch.bfloat16)
-    smolvlm2_02B_model.model.connector = new_connector
+#     logger.info("正在创建新的连接器...")
+#     new_connector = SmolVLMConnector(new_connector_config).to(device).to(torch.bfloat16)
+#     smolvlm2_02B_model.model.connector = new_connector
 
-    logger.info("正在替换语言模型组件...")
-    smolvlm2_02B_model.model.text_model = qwen3_06b_model.model
-    smolvlm2_02B_model.lm_head = qwen3_06b_model.lm_head
+#     logger.info("正在替换语言模型组件...")
+#     smolvlm2_02B_model.model.text_model = qwen3_06b_model.model
+#     smolvlm2_02B_model.lm_head = qwen3_06b_model.lm_head
     
-    logger.info("正在更新模型配置...")
-    vocab_size = qwen3_06b_model.vocab_size
-    smolvlm2_02B_model.vocab_size = vocab_size
-    smolvlm2_02B_model.model.vocab_size = vocab_size
-    smolvlm2_02B_model.config.vocab_size = vocab_size
-    smolvlm2_02B_model.config.text_config.vocab_size = vocab_size
-    smolvlm2_02B_model.model.config.vocab_size = vocab_size
-    smolvlm2_02B_model.model.config.text_config.vocab_size = vocab_size
+#     logger.info("正在更新模型配置...")
+#     vocab_size = qwen3_06b_model.vocab_size
+#     smolvlm2_02B_model.vocab_size = vocab_size
+#     smolvlm2_02B_model.model.vocab_size = vocab_size
+#     smolvlm2_02B_model.config.vocab_size = vocab_size
+#     smolvlm2_02B_model.config.text_config.vocab_size = vocab_size
+#     smolvlm2_02B_model.model.config.vocab_size = vocab_size
+#     smolvlm2_02B_model.model.config.text_config.vocab_size = vocab_size
     
-    image_token_id = 151655
-    smolvlm2_02B_model.image_token_id = image_token_id
-    smolvlm2_02B_model.model.image_token_id = image_token_id
-    smolvlm2_02B_model.config.image_token_id = image_token_id
-    smolvlm2_02B_model.model.config.image_token_id = image_token_id
+#     image_token_id = 151655
+#     smolvlm2_02B_model.image_token_id = image_token_id
+#     smolvlm2_02B_model.model.image_token_id = image_token_id
+#     smolvlm2_02B_model.config.image_token_id = image_token_id
+#     smolvlm2_02B_model.model.config.image_token_id = image_token_id
     
-    smolvlm2_02B_model.generation_config.eos_token_id = 151645
+#     smolvlm2_02B_model.generation_config.eos_token_id = 151645
     
-    logger.info("模型构建完成！")
-    return smolvlm2_02B_model
+#     logger.info("模型构建完成！")
+#     return smolvlm2_02B_model
 
 
 def load_model_v2(
@@ -295,6 +295,8 @@ def load_model_v2(
     smolvlm2_02B_model.model.config.image_token_id = image_token_id
 
     smolvlm2_02B_model.generation_config.eos_token_id = 151645
+    #替换掉模型生成时候用的pad_token_id否则会用默认的SmolVLM2的id:2导致模型生成时出现连续的#
+    smolvlm2_02B_model.generation_config.pad_token_id = 151643
 
     logger.info("模型架构构建完成！")
 

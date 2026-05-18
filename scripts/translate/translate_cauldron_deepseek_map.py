@@ -60,6 +60,11 @@ def flatten_dataset(dataset):
     """
     Flatten 2D dataset into 1D list of messages with index tracking.
 
+    Only `user` and `assistant` are included in the translation payload.
+    `source` is a provenance tag (e.g. 'AI2D', 'ChartQA') that is not
+    translatable and must be preserved as-is; it is carried through
+    separately in reconstruct_dataset.
+
     Returns:
         flat_list:  1D list of all messages
         index_map:  list of (sample_idx, turn_idx) tuples for reconstruction
@@ -76,6 +81,10 @@ def reconstruct_dataset(translated_items, index_map, original_dataset):
     """
     Map translated items back to the original 2D structure.
     Splits each concatenated "用户：… 助手：…" string back into user/assistant.
+
+    Non-translatable fields (`source` and any future additions) are copied
+    verbatim from the original turn so the output schema stays complete and
+    no metadata is silently dropped when writing to parquet.
     """
     reconstructed = [
         [{} for _ in sample]
@@ -84,9 +93,14 @@ def reconstruct_dataset(translated_items, index_map, original_dataset):
     for flat_idx, (sample_idx, turn_idx) in enumerate(index_map):
         translated_text = translated_items[flat_idx]
         parts = list(filter(None, re.split(r'用户：|助手：', translated_text)))
+        original_turn = original_dataset["texts"][sample_idx][turn_idx]
         reconstructed[sample_idx][turn_idx] = {
             "user":      parts[0].strip() if len(parts) > 0 else "",
             "assistant": parts[1].strip() if len(parts) > 1 else "",
+            # Preserve provenance tag unchanged — it is not part of the text
+            # being translated, so dropping it (the previous bug) caused all
+            # `source` values to become None in the output parquet.
+            "source":    original_turn.get("source"),
         }
     original_dataset["texts"] = reconstructed
     return original_dataset

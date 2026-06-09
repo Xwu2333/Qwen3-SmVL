@@ -2,7 +2,7 @@
     {
         "source": "parquet",
         "path": "data/the_cauldron_ZH_filtered_merged/the_cauldron_ZH_dsV32_filtered_merged.parquet",
-        "count": 1000,
+        "count": -1,
         "label": "final-mixture-zh-dsV32"
     }
 ]

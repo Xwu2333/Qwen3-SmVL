@@ -1,8 +1,8 @@
 [
     {
         "source": "danqing",
-        "path": "data/DanQing/data/train-*.parquet",
-        "count": 100,
+        "path": "data/DanQing/train-*.parquet",
+        "count": -1,
         "label": "DanQing"
     }
 ]

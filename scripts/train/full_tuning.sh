@@ -63,7 +63,7 @@ which swanlab
 # User-defined variables
 # ---------------------------------------------------------------------------
 CONFIG_YAML="scripts/train/full_tuning.yaml"
-NUM_PROCESSES=${NUM_PROCESSES:-1}
+NUM_PROCESSES=${NUM_PROCESSES:-8}
 MAIN_PROCESS_PORT=${MAIN_PROCESS_PORT:-29500}
 
 echo "PROJECT_ROOT=$PROJECT_ROOT"

@@ -279,7 +279,6 @@ def load_model_v2(
     # 无论是否resize, qwen3_06b_model的embedding矩阵行数都等于qwen3_06b_model的vocab_size
     # 而非 new_vocab_size（当 new_vocab_size ≤ 矩阵大小时不会发生 resize，
     # 实际大小仍为原始对齐值 actual_embed_size）。
-    # vocab_size = qwen3_06b_model.model.embed_tokens.weight.shape[0]
     vocab_size = qwen3_06b_model.vocab_size
     smolvlm2_02B_model.vocab_size = vocab_size
     smolvlm2_02B_model.model.vocab_size = vocab_size
@@ -309,7 +308,37 @@ def load_model_v2(
 
     logger.info(f"正在从 {trained_model_path} 加载训练权重...")
 
-    def _load_state_dict_from_path(model_dir: str, map_device: str) -> Dict[str, Any]:
+    state_dict = _load_state_dict_from_path(trained_model_path, device)
+
+    # Qwen3 uses weight tying: lm_head.weight == model.embed_tokens.weight.
+    # When the checkpoint was saved with tied weights, lm_head.weight is absent.
+    # Detect this ahead of time and load with strict=False, then re-tie explicitly.
+    tied_lm_head = "lm_head.weight" not in state_dict
+    load_strict = strict and not tied_lm_head
+    missing_keys, unexpected_keys = smolvlm2_02B_model.load_state_dict(state_dict, strict=load_strict)
+
+    if tied_lm_head:
+        logger.info("  检测到权重绑定：lm_head.weight 未保存，重新绑定到 embed_tokens.weight。")
+        smolvlm2_02B_model.lm_head.weight = (
+            smolvlm2_02B_model.model.text_model.embed_tokens.weight
+        )
+        # Remove lm_head.weight from missing_keys since we handled it manually
+        missing_keys = [k for k in missing_keys if k != "lm_head.weight"]
+
+    if missing_keys:
+        logger.warning(f"  ⚠️  缺失的权重键 ({len(missing_keys)} 个): {missing_keys[:5]}"
+                       f"{'...' if len(missing_keys) > 5 else ''}")
+    if unexpected_keys:
+        logger.warning(f"  ⚠️  意外的权重键 ({len(unexpected_keys)} 个): {unexpected_keys[:5]}"
+                       f"{'...' if len(unexpected_keys) > 5 else ''}")
+    if not missing_keys and not unexpected_keys:
+        logger.info("  ✅ 所有权重键完全匹配。")
+
+    logger.info("训练权重加载完成！")
+    return smolvlm2_02B_model
+
+
+def _load_state_dict_from_path(model_dir: str, map_device: str) -> Dict[str, Any]:
         """
         从目录中检测并加载权重文件，支持单文件与分片格式。
         优先级：safetensors > pytorch bin
@@ -364,35 +393,6 @@ def load_model_v2(
             f"  - pytorch_model.bin\n"
             f"  - pytorch_model.bin.index.json"
         )
-
-    state_dict = _load_state_dict_from_path(trained_model_path, device)
-
-    # Qwen3 uses weight tying: lm_head.weight == model.embed_tokens.weight.
-    # When the checkpoint was saved with tied weights, lm_head.weight is absent.
-    # Detect this ahead of time and load with strict=False, then re-tie explicitly.
-    tied_lm_head = "lm_head.weight" not in state_dict
-    load_strict = strict and not tied_lm_head
-    missing_keys, unexpected_keys = smolvlm2_02B_model.load_state_dict(state_dict, strict=load_strict)
-
-    if tied_lm_head:
-        logger.info("  检测到权重绑定：lm_head.weight 未保存，重新绑定到 embed_tokens.weight。")
-        smolvlm2_02B_model.lm_head.weight = (
-            smolvlm2_02B_model.model.text_model.embed_tokens.weight
-        )
-        # Remove lm_head.weight from missing_keys since we handled it manually
-        missing_keys = [k for k in missing_keys if k != "lm_head.weight"]
-
-    if missing_keys:
-        logger.warning(f"  ⚠️  缺失的权重键 ({len(missing_keys)} 个): {missing_keys[:5]}"
-                       f"{'...' if len(missing_keys) > 5 else ''}")
-    if unexpected_keys:
-        logger.warning(f"  ⚠️  意外的权重键 ({len(unexpected_keys)} 个): {unexpected_keys[:5]}"
-                       f"{'...' if len(unexpected_keys) > 5 else ''}")
-    if not missing_keys and not unexpected_keys:
-        logger.info("  ✅ 所有权重键完全匹配。")
-
-    logger.info("训练权重加载完成！")
-    return smolvlm2_02B_model
 
 
 def load_downstream_datasets(task_names: List[str]):

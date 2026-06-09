@@ -1313,7 +1313,7 @@ def data_collate_fix2k(
         images=batch_image,        # 图像列表
         max_length=max_length,     # 最大长度
         return_tensors="pt",       # 返回 PyTorch 张量
-        padding="max_length",      # 填充到最大长度
+        padding="max_length",      # 填充到最大长度, better to set at initialization of the proceesor as the single source of truth, using padding=True for dynamic padding to batch max to save computational cost
         truncation=True,           # 启用截断
     )
 

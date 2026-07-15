@@ -2,7 +2,7 @@
 
 <div align="center">
   <figure>
-  <img src="./resource/PPAP.png" alt="PPAP" width="400" />
+  <img src="./resource/PPAP.png" alt="PPAP" width="400" /><br>
   <figcaption>I have a Qwen, I have a SmolVLM...</figcaption>
   </figure>
 </div>

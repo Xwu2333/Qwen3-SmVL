@@ -20,10 +20,11 @@ First, let us review how SmolVLM2 is built. The overall SmolVLM2 model consists 
 
 <div align="center">
   <figure>
-  <img src="./resource/smolvlm2.png" alt="smolvlm2" width="400" />
+  <img src="./resource/smolvlm2.png" alt="smolvlm2" width="400" /><br>
   <figcaption>Architecture of SmolVLM2</figcaption>
   </figure>
 </div>
+
 
 This design is a fairly common VLM architecture. The core idea is to directly concatenate the output features of the vision model with the embedded text features and then feed them into the language model (LLM), without modules such as cross-attention. Compared with earlier architectures such as LLaVA, the biggest advantage of this approach is that it can reuse existing language models to the greatest extent. Taking Qwen2.5-VL as an example, the 3B, 7B, and 72B model sizes refer only to the LLM part and do not include the vision module. In practice, the 3B model has close to 4B parameters, while the vision module is around 0.4B. The three VLMs of different sizes use the same vision model. For most of the large VLMs, the parameter allocation tilt towards the language model and the vision encoder has relatively smaller size.
 
@@ -42,7 +43,7 @@ The Hugging Face team also mentioned many tricks for improving the performance o
 
 <div align="center">
   <figure>
-  <img src="./resource/concatation.png" alt="concatation" width="400" />
+  <img src="./resource/concatation.png" alt="concatation" width="400" /><br>
   <figcaption>Replace the language backbone of SmolVLM2 with Qwen3-0.6B</figcaption>
   </figure>
 </div>
@@ -144,7 +145,7 @@ As you can see, I tried to keep Qwen3's style and reuse its special tokens as mu
 
 <div align="center">
   <figure>
-  <img src="./resource/change_model.png" alt="change_model" width="400" />
+  <img src="./resource/change_model.png" alt="change_model" width="400" /><br>
   <figcaption>Replace SmolVLM2's text model and lm head</figcaption>
   </figure>
 </div>
@@ -329,7 +330,7 @@ repetitive and can be trivially memorized by the model. Masking thus forces Smol
 
 <div align="center">
   <figure>
-  <img src="./resource/mask.png" alt="mask" width="800" />
+  <img src="./resource/mask.png" alt="mask" width="800" /><br>
   <figcaption>The difference between two loss masking strategies</figcaption>
   </figure>
 </div>
@@ -375,7 +376,7 @@ Training loss of modality alignment:
 
 <div align="center">
   <figure>
-  <img src="./resource/train_loss_connector_pretraining.png" alt="train-loss-cp" width="400" />
+  <img src="./resource/train_loss_connector_pretraining.png" alt="train-loss-cp" width="400" /><br>
   <figcaption>training loss of connector pretraining</figcaption>
   </figure>
 </div>
@@ -386,7 +387,7 @@ Training loss of full tuning:
 
 <div align="center">
   <figure>
-  <img src="./resource/train_loss_full_tuning.png" alt="train-loss-ft" width="400" />
+  <img src="./resource/train_loss_full_tuning.png" alt="train-loss-ft" width="400" /><br>
   <figcaption>training loss of full tuning</figcaption>
   </figure>
 </div>

@@ -1,0 +1,17 @@
+# [tool.uv]
+# Prefer mirror versions, but fall back to PyPI if the mirror lacks a compatible version
+# index-strategy = "unsafe-first-match"
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+
+[[tool.uv.index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

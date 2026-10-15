@@ -32,7 +32,7 @@ The details of each module are briefly described below:
 
 * Vision encoder: The SmolVLM2-256M version uses Google's SigLip model, a ViT-based vision model. It selects the smallest SigLip-93M version for parameter efficiency. The Hugging Face paper does not specify whether it directly uses SigLip's pretrained weight or whether the team build it from scratch. In the SmolVLM2 code, this corresponds to the `SmolVLMVisionTransformer` class.
 
-* MLP-based Vision-Language Merger: This is a simple single-layer MLP. In SmolVLM2, however, a Pixel Shuffle operation is also used to reduce image resolution, further reducing the number of visual tokens and shortening the final concatenated sequence fed into the LLM. The Hugging Face team mentions in the paper that for smaller VLMs, using Pixel Shuffle can also improve performance. The trainable parameters are essentially just a single-layer neural network. The core purpose of this module is modality alignment: mapping visual features from 768 dimensions (SigLip's dimension) to 576 dimensions (SmolLM2's dimension).
+* MLP-based Vision-Language Merger: This is a simple single-layer MLP. In SmolVLM2, however, a Pixel Shuffle operation is also used to reduce image resolution, further reducing the number of visual tokens and shortening the final concatenated sequence fed into the LLM. The Hugging Face team mentions in the paper that for smaller VLMs, using Pixel Shuffle can also improve performance. The trainable parameters are essentially just a single-layer neural network. The core purpose of this module is modality alignment: mapping visual features from 768 dimensions (SigLip's dimension) to 1024 dimensions (Qwen3's dimension).
 
 * Large language model: The text model used by SmolVLM2-256M is SmolLM2-135M. Possibly because the model is small, the Hugging Face team states in the paper that training contains only two stages: large-scale vision training and specialized finetuning for video understanding. To preserve the model's text ability, the team mixes approximately 14% pure-text finetuning data into the training data. 
 
@@ -59,8 +59,6 @@ As the saying goes, top-tier ingredients (models) need only the simplest cooking
 
 The overall architecture and the data flow still follow SmolVLM2. The specific changes are shown in the figure above.
 
-Figure caption: Replacing the language model part of SmolVLM2 with Qwen3-0.6B.
-
 
 ## Key Code Change Walkthrough
 
@@ -68,7 +66,7 @@ Figure caption: Replacing the language model part of SmolVLM2 with Qwen3-0.6B.
 
 * The first thing to change is that the special token used by SmolVLM2 to indicate the image position must be added to Qwen3's tokenizer. The purpose is to prevent SmolVLM2's image token `<image>` from being split into three pieces: `<`, `image`, and `>`. Fortunately, Qwen3 itself has reserved some special tokens for future multimodal usage. For example, `<|image_pad|>`, `<|vision_pad|>` are already registered in its tokenizer. Therefore, `<|image_pad|>` is used instead of `<image>` to reserve the insertion point for image features.
 
-* The second issue is that SmolVLM2's `chat_template` is very different from Qwen3's `chat_template`. The role of `chat_template` is to format text so that the model clearly understands the meaning of different tokens. The code used by Transformers library to control the context format is not Python, but Jinja, a frontend-oriented text formatting language. The chat_template.jinja file of SmolVLM2 is modified to align with Qwen3's complicated context engineering strategy.
+* The second issue is that SmolVLM2's `chat_template` is very different from Qwen3's `chat_template`. The role of `chat_template` is to format text so that the model clearly understands the meaning of different tokens. The code used by Transformers library to control the context format is not Python, but Jinja, a frontend-oriented text formatting language. To leverage Qwen3's complicated context engineering strategy, the chat_template.jinja file of Qwen3 is modified to fit into the SmolVLM2's framework.
 
 Here I list the chat template of Qwen3-0.6B, SmolVLM2, spliced Qwen3-SmVL and Qwen3.5-0.8B for reference.
 
@@ -107,15 +105,14 @@ It looks very messy because there are many `<image>` placeholders. Between `<ima
 
 Even so, we can still find familiar content such as `User:` and `Assistant:`, which are used to indicate the user's input and where the model should output. These keywords are similar to those in Qwen3.
 
-Readers may notice that in addition to image-indicating tokens such as `<fake_token_around_image>` and `<image>`, position indicators such as `<row_1_col_1>` also appear. This is because SmolVLM2 uses a dedicated `image splitting` technique to reduce the impact of downsampling on image resolution. Simply put, it feeds both the global image and high-resolution local images into the model together, as shown in the `image splitting` module in the figure above. Those positional token `<row_i_col_j>` are used to encode the the split sub-image positions.
+Readers may notice that in addition to image-indicating tokens such as `<fake_token_around_image>` and `<image>`, position indicators such as `<row_1_col_1>` also appear. This is because SmolVLM2 uses a dedicated image splitting technique to reduce the impact of downsampling on image resolution. Simply put, it feeds both the global image and high-resolution local images into the model together, as shown in the image splitting module in the figure above. Those positional token `<row_i_col_j>` are used to encode the the split sub-image positions.
 
-Figure caption: The complete inference flow of SmolVLM2. It can be seen that `image splitting` is used for pre-splitting before image input.
 
 **The spliced Qwen3-SmVL model**
 
 Compared with Qwen3-0.6B, SmolVLM2 has much less context control.
 
-To preserve, or at least reserve, Qwen3's thinking, function calling, and other capabilities as much as possible and integrate it into the chat template of SmolVLM2, several changes have been made:
+To preserve, or at least reserve, Qwen3's thinking, function calling, and other capabilities as much as possible and integrate it into the chat template of SmolVLM2, several changes have been made to Qwen3's tokenizer:
 
 1. `<image>` -> `<image_pad>` as placeholder for vision token
 2. `<fake_token_around_image>` -> `<vision_start>` as separator between images
@@ -206,7 +203,7 @@ smolvlm2_02B_model.generation_config.pad_token_id = 151643
 
 ### Third Change: Building and Replacing the Connector Layer
 
-This part is relatively simple. You only need to instantiate a new vision-language merger to project features from vision encoder into visual tokens. Qwen3-0.6B's `hidden_dim` is 1024, while SigLip's `hidden_dim` is 768, so we build a `SmolVLMConnector` layer that maps 768 -> 1024. 
+This part is relatively simple. You only need to instantiate a new vision-language merger to project features from vision space into tensor that lives in text space. Qwen3-0.6B's `hidden_dim` is 1024, while SigLip's `hidden_dim` is 768, so we build a `SmolVLMConnector` layer that maps 768 -> 1024. 
 
 ```python
 ···
@@ -270,7 +267,7 @@ Table: The statistics of datasets used for full fine-tuning
 
 **The translation of mixture leveraged DeepSeek-V3.2**
 
-Because of the limited resources, I only selected single-image sample. As you may noticed, the mixture put a large weight on the captioning and visual question answering since the primary training goal was to bring multimodal QA capability to the spliced model in Chinese context.. The Cauldron was designed for English multimodal training, so there are some subsets such as "rendered_text", "textvqa" and "docvqa" that have samples with English text in image. Obviously, those contents were much harder to translate than the text string part due to loss of data consistency if left untouched after translation, especially for tasks like OCR, text transcription and document understanding. After careful consideration on different scenarios under Chinese context, I decided to keep a small portion of samples from docvqa and textvqa for two reasons while they have lanaguage inconsistency between text in image and accompanying text string. First, I wanted to preserve its capacity in OCR and document understanding, which has been the major training focus of Idefics3 and SmolVLM2. Secondly, reading English documents or understanding English text in image and respond professionally in Chinese is possible and reasonble scenario in Chinese multimodal context. For the tasks like English handwritten text recognition or English memes understanding that are not aligned with Chinese model's use case, I removed them from the dataset pool of mixture building. In most of the dataset of VLM training, author retained a modest amount of text-based reasoning and Q&A problems to preserve the model's ability in language-only tasks. I did not include text-based sample becasue I wanted to focus solely on adapting Qwen3-SmVL to Chinese multimodal scenarios.
+Because of the limited resources, I only selected single-image sample. As you may noticed, the mixture put a large weight on the captioning and visual question answering since the primary training goal was to bring multimodal QA capability to the spliced model in Chinese context. The Cauldron was designed for English multimodal training, so there are some subsets such as "rendered_text", "textvqa" and "docvqa" that have samples with English text in image. Obviously, those contents were much harder to translate than the string part. It seems logical to ignore them due to loss of data consistency if left untouched after translation, especially for tasks like OCR, text transcription and document understanding. After careful consideration on different scenarios under Chinese context, I decided to keep a small portion of samples from docvqa and textvqa for two reasons while they have lanaguage inconsistency between text in image and accompanying text string. First, I wanted to preserve its capacity in OCR and document understanding, which has been the major training focus of Idefics3 and SmolVLM2. Secondly, reading English documents or understanding English text in image and respond professionally in Chinese is possible and reasonble scenario in Chinese multimodal context. For the tasks like English handwritten text recognition or English memes understanding that are not aligned with Chinese model's use case, I removed them from the dataset pool of mixture building. In most of the dataset of VLM training, author retained a modest amount of text-based reasoning and Q&A problems to preserve the model's ability in language-only tasks. I did not include text-based sample becasue I wanted to focus solely on adapting Qwen3-SmVL to Chinese multimodal scenarios.
 
 
 ## Training Method and Code Implementation
@@ -314,7 +311,7 @@ I prepend concise instructions to clarify task objectives and reduce ambiguity d
 
 **Media Intro/Outro Tokens**
 
-As introduced in the paper of SmolVLM2, the intro tokens are textual markers around image and outro tokens are textual instructions to guide model's generation. Both strategies can substantially boost model performance on image tasks. The default intro is set as "以下是一些图片：" and the default outro is "现在请回答以下问题或者完成以下要求：". Those are injected only in the full fine-tuning stage because it is better to reduce noise and keep the text content more concentrated on image instead of biasing on the instruction following capability.
+As introduced in the paper of SmolVLM2, the intro tokens are textual markers around image and outro tokens are textual instructions to guide model's generation. Both strategies can substantially boost model performance on image tasks. The default intro is set as "以下是一些图片：" and the default outro is "现在请回答以下问题或者完成以下要求：". Those are injected only in the full fine-tuning stage because it is better to reduce noise and keep the text content more concentrated on image instead of biasing on the instruction following capability during the pretraining.
 
 **Loss Masking**
 
@@ -358,7 +355,7 @@ Weight decay is to regularize the model and make sure the weights stay in a reas
 
 **Batch size and training step**
 
-In general, the larger the batch size, the better the performance. I use a per-GPU batch size of 4 on each RTX6000 pro with 96GB VRAM because training heuristics show 8 causes OOM error after certain steps. The gradient accumulation is set to 4. For modality alignment, 4 RTX6000 pro ara deployed and the number increases to 8 for full fine-tuning. Therefore, the effective batch size for two stages are 128 and 256 respectively. Both training stages roll over the whole set once.
+In general, the larger the batch size, the better the performance. I use a per-GPU batch size of 4 on each RTX6000 pro with 96GB VRAM because training heuristics show 8 causes OOM error after certain steps. The gradient accumulation is set to 8. For modality alignment, 4 RTX6000 pro are deployed and the number increases to 8 for full fine-tuning. Therefore, the effective batch size for two stages are 128 and 256 respectively. Both training stages roll over the whole set once.
 
 
 
@@ -396,7 +393,7 @@ It is obvious that the loss is much smoother in the merger-only stage than unfre
 
 ### Evaluation
 
-The common evaluation benchmark for VLMs are like MMMU, MathVista, MMStar, or those supported in the [VLMEvalKit](https://github.com/open-compass/vlmevalkit). However, those benchmark are almost all English-based and are designed to evaluate model's performance under English multi-modal contexts. The Qwen3-SmVL is trained to be competent for Chinese multi-modal tasks especially for the Chinese visual-question answering. Therefore, a Chinese-gounded multi-modal benchmark would be more decent. The open-source Chinese vision benchmark is very rare and I utilize the [AlignMMBench](https://alignmmbench.github.io/), which encompasses 13 real-world Chinese vision tasks and leverages a separate rule-calibrated 6B model to evaluate the Chinese alignment of VLM's response.
+The common evaluation benchmark for VLMs are like MMMU, MathVista, MMStar, or those supported in the [VLMEvalKit](https://github.com/open-compass/vlmevalkit). However, those benchmark are almost all English-based and are designed to evaluate model's performance under English multi-modal contexts. The Qwen3-SmVL is trained to be competent for Chinese multi-modal tasks especially for the Chinese visual-question answering. Therefore, a Chinese-grounded multi-modal benchmark would be more decent. The open-source Chinese vision benchmark is very rare and I utilize the [AlignMMBench](https://alignmmbench.github.io/), which encompasses 13 real-world Chinese vision tasks and leverages a separate rule-calibrated 6B model to evaluate the Chinese alignment of VLM's response.
 
 I evaluate the checkpoint of both connector pretraining and full tuning on AlignMMBench. I also evaluate Qwen3.5-0.8B, a advanced and multimodal-native small model in Qwen3 series, on the benchmark. In addition, some old models' performance are also attached in the table for comparison purpose.
 
@@ -460,7 +457,7 @@ The initial reason of exploring the SmolVLM2 is its small memory footprint. As I
 
 ### Opportunities for improvements
 
-First, the training data size is extremely trivial compared with millions or even billions of tokens used in most VLMs. Continuing the tuning on larger and more diversified corpus definitely brings significant improvement on the benchmark. Secondly, a data synthesis and filtering pipeline is needed for high-quality training corpus because translation plays a limited role and the translated materials may not align with Chinese context well because the source is from English-based web crawling or LLM's generation. Last but not least, further enhancement on model architecture is necessary. In this version of Qwen3-SmVL, the Qwen3-0.6B serves as a replacement in 256M variant but it could be more beneficial to replace the 500M model because although the performance gap comes mainly from the larger lanaguage backbone, its vision encoder may be more competent after collaborative training with a stronger LLM. And future usage of more advanced vision or language module is also promising to try.
+First of all, the training data size is extremely trivial compared with millions or even billions of tokens used in most VLMs. Continuing the tuning on larger and more diversified corpus definitely brings significant improvement on the benchmark. Secondly, a data synthesis and filtering pipeline is needed for high-quality training corpus because translation plays a limited role and the translated materials may not align with Chinese context well because the source is from English-based web crawling or LLM's generation. Last but not least, further enhancement on model architecture is necessary. In this version of Qwen3-SmVL, the Qwen3-0.6B serves as a replacement in 256M variant but it could be more beneficial to replace the 500M model because although the performance gap comes mainly from the larger lanaguage backbone, its vision encoder may be more competent after collaborative training with a stronger LLM. In a nutshell, future usage of more advanced vision or language module is also promising to try. Last but not least, bringing Chinese video understanding to the model remains an fascinating but challenging area to explore because the public Chinese video dataset is far more scarce than the image.
 
 ## References
 

@@ -1276,7 +1276,7 @@ def data_collate_fix2k(
         # 获取对话文本内容
         chat_texts = example["texts"]
         if isinstance(chat_texts, list):
-            chat_texts = chat_texts[0]
+            chat_texts = chat_texts[0] #这里对于load_data_v2来说只取了第一轮对话，多轮对话样本后续轮数会被隐式丢掉!!!!!
 
         # 构建对话消息格式，符合聊天模型的输入要求
         messages = [
